@@ -1,0 +1,559 @@
+---
+title: "Pond Metabolism Example"
+author: "Audrey H. Goeckner"
+date: "2024-06-27"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Pond metabolism example using 1 month of data from pond Meandering Way of my 3rd chapter. 
+As a note, you'll see that I use lapply when I read in raw .csv files. I do this to combine the multiple files gained over time for a single sensor, but in this example there is only one file per sensor.
+
+# Getting started
+### Libraries
+```{r message = FALSE}
+
+library(rLakeAnalyzer) #lake parameters
+library(LakeMetabolizer) #metabolism package
+library(lubridate) #working with time
+library(tidyverse)
+
+```
+
+### Directories
+```{r}
+#working directory
+setwd("/Users/audreygoeckner/Library/CloudStorage/OneDrive-UniversityofFlorida/Pond_Metabolism")
+
+#path for raw data in this example. 
+#I set my paths as values sto easily change directories in this one spot
+path.rawData = "./raw_data"
+```
+
+### Pond parameters
+These details are needed later in various equations. I like to include this up at the top so I can enter in all my pond info I need to know
+```{r}
+#Area of pond in square meters (m^2)
+pond.area = 7075
+
+#Altitude of pond above sea level in meters (m)
+pond.alt = 9
+
+#Latitude of pond in decimal degrees
+pond.latitude = 27.4
+  
+#Height above water surface you measured wind speed in meters (m)
+wnd.z = 2
+
+```
+
+### Gas saturation functions
+These functions are used for calculating O2 saturation
+```{r}
+
+###########################################
+# Correct BAROMETRIC PRESSURE for altitude
+###########################################	
+### bpcalc function estimates barometric pressure (BP) given altitude and standard BP. This is the "bp" required for O2 sat
+### This is based on the barometric formula
+### temp = degC for the water
+### alt = elevation in m
+### bpst = standard barometric pressure in inches of Hg (untis usually given by weather websites).  
+### Temp is usually relative to a standard, 15 degC, and I have hard coded it at 15.  
+### Source: John Colt, Dissolved Gas Concentration in Water: Computation as Functions of Temperature, Salinity and Pressure, 2012
+
+#when bp input is in inches mercury
+bpcalc.inHg<- function(bpst, alt) {
+  bpst*25.4*exp((-9.80665*0.0289644*alt)/(8.31447*(273.15+15))) #25.4 converts inHg to mmHg, 288.15 is standard pressure at sea level
+}
+
+#when bp input is in mm mercury
+bpcalc.mmHg<- function(bpst, alt) {
+  bpst*exp((-9.80665*0.0289644*alt)/(8.31447*(273.15+15))) 
+}
+#####
+
+###########################################
+# Calculate WATER DENSITY w/ Temp and BP
+###########################################	
+#Water density of air saturated water given water temperature in degC.  
+#Equation updated by AG  - the International Committee for Weights and Measures (2001), who consider Patterson&Morris (1994), who Bob cited
+#https://metgen.pagesperso-orange.fr/metrologieen19.htm
+
+watdens.gcm3<-function(temp){
+  t<-temp
+  a1<- -3.983035  # degrees C
+  a2<- 301.797    # degrees C
+  a3<- 522528.9   # degrees C
+  a4<- 69.34881   # degrees C
+  a5<- 999.974950 # kg/m^3
+  
+  dens<- a5 * (1-(((t + a1)^2 * (t + a2))/(a3 * (t + a4)))) #returns result as kg/m^3
+  dens/1000   #converts kg/m^3 -> g/cm^3
+}
+#####
+
+###########################################
+# Calculate O2 SATURATION w/ Temp and BP
+###########################################	
+### Oxygen saturation. Alternative formulation from Garcia and Gordon (umol/kg), which is converted to mg/L and corrected for water density.  
+### This function gives the same values as from Colt and is the one a MIMSer should use.
+### u is the vapor pressure of water
+### Ending units mg/L
+
+osat.mgL<- function(temp, bp) {
+  u<-10^(8.10765-(1750.286/(235+temp)))
+  ts<-log((298.15-temp) / (273.15 + temp))
+  a0<-5.80871
+  a1<-3.20291
+  a2<-4.17887
+  a3<-5.1006
+  a4<- -9.86643e-2
+  a5<-3.80369
+  
+  u<-10^(8.07131-(1750.63/(233.426+temp))) #Antoine equation for the vapor pressure of water, final unit mmHg
+  sato<-(exp(a0 + a1*ts + a2*ts^2 + a3*ts^3 + a4*ts^4 + a5*ts^5))*((bp-u)/(760-u))
+  watdens.gcm3(temp)*sato*(31.9988/1000)##converts umol/kg to mg/L
+}
+```
+
+# Weather/atmospheric data
+```{r}
+weather_15 <- 
+list.files(path = "./raw_data", pattern = "weatherData", #list files in path that match the pattern
+           full.names = TRUE) %>% #full.names extracts the full file name that matches your pattern
+  lapply(read.csv, skip=2, header=FALSE) %>% #read.csv all listed files, skip the first 2 rows
+  bind_rows() %>% select(-1) %>% #bind files by rows, remove the first column, which is row #s
+   rename("datetime" = 1, "atm.temp.F" = 2, "RH" = 3, #renaming the rows
+          "wind.mph" = 4, "gust.mph" = 5, "wind.dir" = 6, "bp.inHg" = 7) %>% 
+  mutate(atm.temp.C = round(((atm.temp.F-32)/1.8),digits=2), # convert temp in F to C 
+         datetime = as.POSIXct(datetime, format ="%m/%d/%y %H:%M")) # format date and time
+
+#review
+head(weather_15)
+
+```
+
+# Thermistor chain data
+
+### Thermal profiles 
+I know that there is a shorter way to import and combine thermistor files for each depth using loops but I haven't put time into it yet. Each do.call() call is for a different sensor. Each sensor file is row binded by there various files over time, then I add a column defining depth. 
+```{r}
+
+#confirm all desired files are included for a depth
+list.files(path=path.rawData, pattern="0.00")
+
+
+
+#combining thermistor chain data
+therm_5 <- 
+  rbind( 
+  do.call(rbind, lapply(list.files(path=path.rawData, pattern="0.00",full.names = TRUE), read.csv, header=FALSE,skip=2)) %>% mutate(depth="0"),
+  do.call(rbind, lapply(list.files(path=path.rawData, pattern="*0.25",full.names = TRUE), read.csv, header=FALSE,skip=2)) %>% mutate(depth="0.25"),
+    do.call(rbind, lapply(list.files(path=path.rawData, pattern="0.50",full.names = TRUE), read.csv, header=FALSE,skip=2)) %>% mutate(depth="0.50"),
+    do.call(rbind, lapply(list.files(path=path.rawData, pattern="0.75",full.names = TRUE), read.csv, header=FALSE,skip=2)) %>% mutate(depth="0.75"),
+    do.call(rbind, lapply(list.files(path=path.rawData, pattern="1.00",full.names = TRUE), read.csv, header=FALSE,skip=2)) %>% mutate(depth="1.00"),
+    do.call(rbind, lapply(list.files(path=path.rawData, pattern="1.25",full.names = TRUE), read.csv, header=FALSE,skip=2)) %>% mutate(depth="1.25"),
+    do.call(rbind, lapply(list.files(path=path.rawData, pattern="1.50",full.names = TRUE), read.csv, header=FALSE,skip=2)) %>% mutate(depth="1.50"),
+    do.call(rbind, lapply(list.files(path=path.rawData, pattern="1.75",full.names = TRUE), read.csv, header=FALSE,skip=2)) %>% mutate(depth="1.75"),
+    do.call(rbind, lapply(list.files(path=path.rawData, pattern="2.00",full.names = TRUE), read.csv, header=FALSE,skip=2)) %>% mutate(depth="2.00"),
+    do.call(rbind, lapply(list.files(path=path.rawData, pattern="3.00",full.names = TRUE), read.csv, header=FALSE,skip=2)) %>% mutate(depth="3.00")
+  ) %>% 
+  select(-1) %>% rename(datetime=1,wtemp.F=2,sol.lumft2=3) %>% #remove column 1 and rename
+  mutate(depth = as.factor(depth), #depth as a factor
+         temp.C = round(((wtemp.F-32)/1.8),digits=2), #calculating water temp in C
+         datetime = as.POSIXct(datetime, format = "%m/%d/%y %H:%M",tz="UTC"), #format date
+         date = as.Date(datetime)) %>% #day of obs
+  filter(!date == "2022-08-18") #removing the one date we maintained sensors within this example time frame
+
+#review
+head(therm_5)
+
+
+#check for anomalies in data
+ggplot(therm_5, aes(x = datetime, y = temp.C, color = depth)) +
+  geom_line() + theme_classic(base_size = 15)+
+  labs(y = "Water temperature (Celcius)", x = "Datetime", color = "Water \nColumn \nDepth (m)")
+#none here!
+
+
+
+#average observations to get 15-minute interval data
+therm_15 <- therm_5 %>%
+  mutate(by15 = cut(datetime, breaks="15 min")) %>%
+  group_by(by15,depth) %>% 
+  summarise_all(.funs = mean) %>% 
+  ungroup() %>% select(-by15) %>% 
+  mutate(datetime = datetime - 5*60) #subtract 5 min so times are in 00:00, 15:00, 30:00, 45:00 intervals 
+
+
+
+#Convert data from long to wide format
+therm_15_wide <- therm_15 %>% 
+  select(datetime, depth, temp.C) %>% 
+  spread(depth,temp.C) # convert dataset from 'long' format to 'wide, only do two col.
+
+#Convert the colnames of the data to include ‘wtemp.C_’
+colnames(therm_15_wide)[-1] = paste('temp.C_', colnames(therm_15_wide)[-1], sep='')
+
+#tibble to dataframe
+therm_15_wide <- as.data.frame(therm_15_wide)
+
+#review
+head(therm_15_wide)
+
+
+#check to see if there are any missing data - should be non
+which(is.na(therm_15_wide)) #none!
+
+
+
+#check out the heat map! You can see how the data is interpolated for the date removed, 8/18
+wtr.heat.map(therm_15_wide)
+
+```
+
+### Mixing depth
+Calculate the depth of the mixing layer (zmix) using thermal profiles. When the water column is mixed and there is no mixing depth, zmix will return "NA". In this case I convert all NA to the max depth of the pond
+```{r}
+#pond depth in meters
+pond.depth = 4.0
+
+#z.mix depth
+zmix = 
+  ts.thermo.depth(wtr = therm_15_wide, na.rm = T) %>% #zmix output is a column "thermo.depth"
+  mutate(zmix = case_when(is.na(thermo.depth)~pond.depth, TRUE~thermo.depth)) %>% #if NA, replace with max depth, otherwise keep zmix
+  select(-thermo.depth) #remove thermo.depth column
+
+#review
+head(zmix)
+
+
+#compare thermal profiles and calculated mixing depths
+ggplot(therm_15, aes(x = datetime, y = as.numeric(as.character(depth))))+
+  geom_contour_filled(aes(z = temp.C))+
+  geom_hline(yintercept = pond.depth)+ 
+  geom_point(data = zmix, aes(x = datetime, y = zmix), color = "red", alpha = 0.6, size = 0.7)+
+  scale_y_reverse()+
+  theme_classic(base_size = 15)+
+  labs(x = "Datetime", y = "Water Column Depth (m)", fill = "Water \nTemperature (C)")
+
+```
+
+### Daylight hours
+lake metabolizer uses photosynthetically active radiation in the model. I used the light sensor nearest the surface of the water on the thermistor chain. Raw units are in lumens per square ft (foot-candles), but input should be in par units of umol per sq meter per second. 
+```{r}
+#light data
+light_15_0.25m <- 
+  therm_15 %>% 
+  filter(depth == "0.25") %>% 
+  mutate(par = sol.lumft2*10.764/54) %>% #I checked this conversion with chat gpt 
+  select(datetime,par)
+
+
+#check to make sure light data make sense 
+ggplot(light_15_0.25m, aes(x = datetime, y = par)) +
+  geom_line()+
+  theme_classic(base_size = 15)+
+  labs(x = "Datetime", y = "umol m^-2 s^-1")
+
+```
+
+
+# Dissolved Oxygen
+```{r}
+
+#raw 5 minute data
+DOraw_5 <-
+  do.call(rbind,lapply(list.files(path=path.rawData, pattern="DOdata.*\\.csv$", full.names = TRUE), #list all csv files of a pattern
+                 read.csv, skip=2, header=FALSE)) %>% select(-1) %>% #read.csv for listed files, remove first row, remove first column, rowbind
+  rename(datetime = 1,DO.mgL = 2, temp.F = 3) %>% #rename columns
+  mutate(temp.C = ((temp.F-32)/1.8), #calculate water temp as Celsius
+         datetime = as.POSIXct(datetime, format = "%m/%d/%y %H:%M",tz="UTC"), #date formatting
+         across(everything(), function(x){replace(x, which(x<0), NA)}), #replace error readings "-888" or below 0 with NA
+         date = as.Date(datetime)) %>% #day from datetime
+  filter(!date == "2022-08-18") #removing sensor maintenance dates
+
+#review
+head(DOraw_5)
+
+#check for weird data
+ggplot(DOraw_5, aes(x=datetime, y=DO.mgL))+
+  geom_line()+
+  geom_hline(yintercept = 0, color = "blue")+
+  theme_classic(base_size = 15)+
+  labs(x = "Datetime", y = "DO conc. (mg/L)")
+
+
+#average raw data to 15 minutes
+DOraw_15 <-DOraw_5 %>% 
+  mutate(by15 = cut(datetime, breaks="15 min")) %>%
+  group_by(by15) %>% 
+  summarise_all(.funs = mean,na.rm=TRUE) %>%
+  ungroup() %>% select(-by15) %>% 
+  mutate(datetime = datetime - 5*60) #subtract 5 min so times are in 00:00, 15:00, 30:00, 45:00 intervals 
+
+#review
+head(DOraw_15)
+
+#We run into issues when there are NAs at the 15 minute average mark
+#if there are any, I use the average of the previous and following reading.
+#look at NA values for DO
+DOraw_15[is.na(DOraw_15$DO.mgL),]
+#none
+
+
+#merge DO and weather data
+DO.weather_15 <- merge(DOraw_15, weather_15, by="datetime") %>% 
+  mutate(date = as.Date(datetime),
+         O2sat.expected = osat.mgL(temp.C,bp = bpcalc.inHg(bp.inHg, alt = pond.alt)),
+         DO.perc=(DO.mgL/O2sat.expected)*100)
+
+#review
+head(DO.weather_15)
+
+#check data - % dissolved oxygen saturation
+ggplot(DO.weather_15, aes(x=datetime, y=DO.perc))+
+  geom_hline(yintercept = 100, color = "blue")+
+  geom_line()+
+ # scale_x_datetime(date_labels = "%b", date_breaks = "1 month")+
+  theme_classic(base_size = 15)+
+  labs(x = "Datetime", y = "% DO")
+
+```
+
+# Model parameters and gas transfer
+
+First I'm going to merge the light and zmix data into one dataset. Helpful for saving everything together later. 
+```{r}
+#adding light data
+pondData_15 <- merge(DO.weather_15, light_15_0.25m, by="datetime")
+#adding zmix data
+pondData_15 <- merge(pondData_15, zmix, by="datetime")
+
+#check if there are any duplicated days (this happened to me before, maybe a time change issue?)
+isTRUE(duplicated(pondData_15$datetime))
+#no duplicated days
+```
+
+### Gas transfer velocity (K; vars 7-8)
+Here I calculate and comparing two common K vars used for small ponds versus larger lakes. Feel free to try out others, but these are more appropriate for smaller systems. For N2 fluxes, Zhang et al. (2022), used an approach that found the cole equation was best for their ponds. 
+```{r warning = FALSE}
+#7. Scaled wind speed. Scaled to standard U10 (10 m above the water surface) based on height of observation
+pondData_15$U10 = wind.scale.base(wnd = pondData_15$wind.mph, 
+                      wnd.z = wnd.z) # height above water you recorded wind speed
+
+
+#the ".base" function within each ".kGAS" functions returns the gas exchange velocity based on the chosen model in units of m/day
+#the ".kGAS" function then returns the gas exchange velocity for the specific gas of interest w/ no unit conversions (m/day)
+
+#8a. Cole & Caraco (1998) equation (only wind based)
+pondData_15$kgas.cole = k600.2.kGAS.base(temperature = pondData_15$temp.C, #water temperature
+                             gas = "O2", #gas of interest (can do CO2)
+                             k600 = k.cole.base(pondData_15$U10) #k600; scaled wind speed
+                             )
+
+#8b. Vachon & Prairie (2013) equation (emphasizes size and shape of water body)
+pondData_15$kgas.vachon = k600.2.kGAS.base(temperature = pondData_15$temp.C, #water temperature
+                               gas = "O2", #gas of interest
+                               k600 = k.vachon.base(wnd = pondData_15$U10, #k600; scaled wind speed
+                                             lake.area = pond.area, #area of pond
+                                             params = c(2.51,1.48,0.39))) #model parameters that were considered the best in the paper
+
+#You will get a warning about temperature. This is because the Schmidt # is only for temepratures in the range of 0-30 C. I have yet to consult others about their approach for 30+ temps (we have up to 37.2 in this dataset)
+
+
+#plot gas transfer velocities
+ggplot(data = pondData_15, aes(x = datetime))+
+  geom_line(aes(y = kgas.cole, color = "blue"))+
+  geom_line(aes(y = kgas.vachon, color = "darkgreen"))+
+  theme_classic(base_size = 15)+
+  labs(y = "Gas transfer velocity (m/day)", x = "Datetime")+
+  scale_colour_manual(name = 'Model',labels = c('Cole & Caraco (1998)','Vachon & Prairie (2013)'),
+         values =c('blue'='blue','darkgreen'='darkgreen'))+
+  theme(legend.position = "top")
+  
+```
+
+
+# Modeling Pond Metabolism
+
+### Modified metabolism function
+We use a maximum likelihood model to estimate pond metabolism. Following the online tutorial by Hilary Dugan, we create our own function for producing a metabolism ouput, and I modify it further to include all metabolic rates and MLE model parameter estimates for each day.  
+```{r}
+metab.mle.estimates <- function(data, do.obs, do.sat, k.gas, z.mix, wtr, par, error.type) {
+# Setup empty data.frame for three months
+output = data.frame(date = as.Date(unique(data$date)))
+
+# Loop through each day.
+for (i in 1:nrow(output)) {
+
+# Create a index for each day, so only those days values will be used
+indx <- as.Date(data$datetime) == output$date[i]
+
+m.mle = metab.mle(do.obs[indx], do.sat[indx], k.gas[indx], z.mix[indx],par[indx],wtr[indx], error.type = error.type)
+
+output$GPP[i] = round(m.mle$metab[1],3)
+output$ER[i] = round(m.mle$metab[2],3)
+output$NEP[i] = round(m.mle$metab[3],3)
+output$GPP.coef[i] = round(m.mle$params[1],3)
+output$ER.coef[i] = round(m.mle$params[2],3)
+output$Q[i] = round(m.mle$params[3],3)
+output$nll[i] = round(m.mle$params[4],3)
+}
+return(output)
+}
+
+```
+
+### Modeling with two gas transfer coefficients
+```{r warning = FALSE}
+
+pondMetabolism.cole <- pondData_15 %>%
+  metab.mle.estimates(do.obs = .$DO.mgL, #observations of DO in mg/L
+                      do.sat = .$O2sat.expected, #expected DO saturation 
+                      z.mix = .$zmix, #mixing layer depth
+                      wtr = .$temp.C, #water temperature at the DO sensor (AKA HOBO temp)
+                      k.gas = .$kgas.cole, #choice of gas transfer
+                      par = .$par, #photosynthetically active radiation
+                      error.type = "PE") #process error, other option is "OE" or observation error
+#review
+head(pondMetabolism.cole)
+
+pondMetabolism.vachon <- pondData_15 %>%
+  metab.mle.estimates(do.obs = .$DO.mgL, #observations of DO in mg/L
+                      do.sat = .$O2sat.expected, #expected DO saturation 
+                      z.mix = .$zmix, #mixing layer depth
+                      wtr = .$temp.C, #water temperature at the DO sensor (AKA HOBO temp)
+                      k.gas = .$kgas.vachon, #choice of gas transfer
+                      par = .$par, #photosynthetically active radiation
+                      error.type = "PE") #process error, other option is "OE" or observation error
+
+#review
+head(pondMetabolism.vachon)
+
+
+
+
+#Check output in plots and compare the two gas transfer velocities
+
+#GPP
+ggplot(pondMetabolism.cole, aes(x = date, y = GPP))+
+  geom_hline(yintercept = 0)+
+  geom_line(aes(color = "hotpink"), size=1)+
+  geom_line(data =  pondMetabolism.vachon, aes(x = date, y = GPP, color = "royalblue"), linewidth=1)+
+  scale_color_manual(name = 'Model',labels = c('Cole & Caraco (1998)','Vachon & Prairie (2013)'),
+         values =c('hotpink'='hotpink','royalblue'='royalblue'))+
+  theme_classic(base_size = 15) + theme(legend.position = c(0.75,0.8))
+#some impossible values here (negative GPP)
+
+#ER
+ggplot(pondMetabolism.cole, aes(x = date, y = ER))+
+  geom_hline(yintercept = 0)+
+  geom_line(aes(color = "hotpink"), size=1)+
+  geom_line(data =  pondMetabolism.vachon, aes(x = date, y = ER, color = "royalblue"), linewidth=1)+
+  scale_color_manual(name = 'Model',labels = c('Cole & Caraco (1998)','Vachon & Prairie (2013)'),
+         values =c('hotpink'='hotpink','royalblue'='royalblue'))+
+  theme_classic(base_size = 15) + theme(legend.position = c(0.825,0.8))
+
+#NEP
+ggplot(pondMetabolism.cole, aes(x = date, y = NEP))+
+  geom_hline(yintercept = 0)+
+  geom_line(aes(color = "hotpink"), size=1)+
+  geom_line(data =  pondMetabolism.vachon, aes(x = date, y = NEP, color = "royalblue"), linewidth=1)+
+  scale_color_manual(name = 'Model',labels = c('Cole & Caraco (1998)','Vachon & Prairie (2013)'),
+         values =c('hotpink'='hotpink','royalblue'='royalblue'))+
+  theme_classic(base_size = 15) + theme(legend.position = c(0.3,0.2))
+
+
+
+#We can look at number of days outside of acceptable range
+sum(pondMetabolism.cole$GPP<0)
+sum(pondMetabolism.vachon$GPP<0)
+
+sum(pondMetabolism.cole$ER>0)
+sum(pondMetabolism.vachon$ER>0)
+
+```
+
+
+```{r}
+1 + 1
+knitr::knit_exit()
+```
+# Assessing model parameters [more here later]
+In the parameter output there are three parameters used in the mle model (c1, c2, and epsilon) and one value used to assess model fit (nll)
+
+#### nll
+nll (negative log-likelihood) helps in evaluating the goodness of fit of the model, guiding the optimization process to find the best set of parameters that explain the observed data.
+*represents the probability of the observed data given a set of model parameters.by minimizing nll, we are effectively maximizing the log-likelihood.
+*closer to zero and more negative = better fit
+
+#### GPP.coef and ER.coef
+These terms are c1 and c2. 
+-c1 is used to calculate GPP as mean(c1*irr, na.rm=TRUE)*freq
+-c2 is used to calculate ER as mean(c2*log(wtr), na.rm=TRUE)*freq
+
+-c1 is a parameter describing GPP per unit of incoming light 
+-c2 is a parameter describing average rate of respiration per natural log of water temperature
+
+#### Q 
+Stands for epsilon, or process error.
+
+# Assessing modeled versus observed DO
+Another way to review your data
+
+```{r echo=FALSE, results='asis', warning = FALSE, out.width = "50%"}
+## Loop through metabolism results and graph day by day
+#pondData_15$doy <- as.numeric(format(pondData_15$datetime, "%j")) #add day of year to dataset - has to be numeric
+#pondMetabolism.cole$doy <- as.numeric(format(pondMetabolism.cole$date, "%j"))
+library(ggformula)
+
+## Loop through metabolism results and graph day by day
+pondData_15$doy <- as.numeric(format(pondData_15$datetime, "%j")) #add day of year to dataset - has to be numeric
+
+#loop to get model predictions for every day
+for (i in 1:length(pondMetabolism.cole$year)){
+  day_number <- i
+  #day <- filter(pondData_15, doy == pondMetabolism.cole$doy[day_number])
+  #day <- pondData_15
+  wtr <- day$temp.C #water temp column name
+  doobs <- day$DO.mgL #oxygen column name
+  nobs <- length(day$datetime)
+  c1 <- 0.001#pondMetabolism.cole$GPP.coef[i] #PAR coeff
+  c2 <- -0.02#pondMetabolism.cole$ER.coef[i] #log(Temp) coeff
+  
+  day$flux <- NA
+  day$O.modeled[1] <- doobs[1]
+  for (i in 2:nobs){
+    day$flux[i-1] <- (day$kgas.cole[i-1]/nobs/day$zmix[i-1]) * (day$O2sat.expected[i-1] - day$O.modeled[i-1])
+    day$O.modeled[i] <- day$O.modeled[i-1] + c1*day$par[i-1] + c2*log(day$temp.C[i-1]) + day$flux[i-1]
+  }
+  
+ print(str_c("Pond meandering way ", as.Date(pondMetabolism.cole$doy[day_number], origin = "2022-08-01")))  
+  cat("\n")
+
+ print(knitr::kable(pondMetabolism.cole[day_number,], caption = "Metabolism Estimates"))
+  
+  cat("\n")
+
+  cols <- c("Model" = "red", "Observed Values" = "black")
+  print(gf_point(day, doobs ~ datetime, color = ~"Observed Values") + 
+          geom_line(aes(y = O.modeled, x = datetime, color = "Model"), size = 1.3) +
+          labs(title = str_c("Day of Year: ", pondMetabolism.cole$doy[day_number]), y = "O2 mg/l", color = "") + 
+          theme_minimal() + scale_colour_manual(name="",values=cols))
+  
+  print(gf_point(day, U10 ~ datetime) + 
+          labs(title = str_c("Day of Year: ", pondMetabolism.cole$doy[day_number]), y = "Scaled Wind (m/s)") + theme_minimal())
+
+#  day.wtr <- get.vars(day, 'temp.C')
+#  print(wtr.heatmap.layers((day.wtr)))
+
+  print(gf_point(day$flux ~ day$datetime) + theme_minimal() + 
+          labs(title = str_c("Day of Year: ", pondMetabolism.cole$doy[day_number]), y = "Flux (O2 mg/l", x = "datetime"))
+  cat("\n\n\n")
+  cat("\n\n\\pagebreak\n")
+  
+}
+```
