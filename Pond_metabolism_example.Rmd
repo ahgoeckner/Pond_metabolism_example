@@ -7,8 +7,19 @@ editor_options:
   chunk_output_type: console
 ---
 
-Pond metabolism example using 1 month of data from pond Meandering Way of my 3rd chapter. 
-As a note, you'll see that I use lapply when I read in raw .csv files. I do this to combine the multiple files gained over time for a single sensor, but in this example there is only one file per sensor.
+This R markdown is an example of modeling pond metabolism using 1 month of data (August 2022) from pond Meandering Way, a site in my 3rd chapter. We model pond metabolism using the LakeMetabolizer package (Winslow et al. 2016), and functions of the rLakeAnalyzer package (Winslow et al. 2019).
+
+|I built/modified this script from the tutorial I found online through a workshop hosted by GLEON (Global Lake Observatory Network) and run by Corinna Gries & Hilary Dugan: https://g11.gleon.org/data/gleon18/dataworkshop
+
+|For our work, we collected thermal temperature profiles using thermistor chain with temp/light sensors throughout the water column. This pond was ~4 to 4.5 m deep and we had sensors down to 3 m deep. We did not use a pressure transducer to keep track of water level fluctuations. 
+
+|This example uses a maximum likelihood model (MLE) to estimate pond metabolism. There is a bayesian approach I'd like to try in the future. 
+
+|As a note, you'll see that I use lapply or do.call when I read in raw .csv files. I do this to combine the multiple files gained over time for a single sensor. In this example there is only one file per sensor, but I keep the lapply/do.call functions so they can be adapted. 
+
+|This is unfinished! Still to come:
+- Assessing estimated MLE parameters 
+- Assessing estimated versus observed dissolved oxygen readings
 
 # Getting started
 ### Libraries
@@ -24,15 +35,15 @@ library(tidyverse)
 ### Directories
 ```{r}
 #working directory
-setwd("/Users/audreygoeckner/Library/CloudStorage/OneDrive-UniversityofFlorida/Pond_Metabolism")
+setwd("/Users/audreygoeckner/Library/CloudStorage/OneDrive-UniversityofFlorida/Goeckner_R_Projects/Pond_Metabolism")
 
 #path for raw data in this example. 
 #I set my paths as values sto easily change directories in this one spot
 path.rawData = "./raw_data"
 ```
 
-### Pond parameters
-These details are needed later in various equations. I like to include this up at the top so I can enter in all my pond info I need to know
+### Basic pond parameters
+These details are needed later in various equations throughout. I like to include this up at the top so I can enter in all my pond info in one spot
 ```{r}
 #Area of pond in square meters (m^2)
 pond.area = 7075
@@ -46,76 +57,6 @@ pond.latitude = 27.4
 #Height above water surface you measured wind speed in meters (m)
 wnd.z = 2
 
-```
-
-### Gas saturation functions
-These functions are used for calculating O2 saturation
-```{r}
-
-###########################################
-# Correct BAROMETRIC PRESSURE for altitude
-###########################################	
-### bpcalc function estimates barometric pressure (BP) given altitude and standard BP. This is the "bp" required for O2 sat
-### This is based on the barometric formula
-### temp = degC for the water
-### alt = elevation in m
-### bpst = standard barometric pressure in inches of Hg (untis usually given by weather websites).  
-### Temp is usually relative to a standard, 15 degC, and I have hard coded it at 15.  
-### Source: John Colt, Dissolved Gas Concentration in Water: Computation as Functions of Temperature, Salinity and Pressure, 2012
-
-#when bp input is in inches mercury
-bpcalc.inHg<- function(bpst, alt) {
-  bpst*25.4*exp((-9.80665*0.0289644*alt)/(8.31447*(273.15+15))) #25.4 converts inHg to mmHg, 288.15 is standard pressure at sea level
-}
-
-#when bp input is in mm mercury
-bpcalc.mmHg<- function(bpst, alt) {
-  bpst*exp((-9.80665*0.0289644*alt)/(8.31447*(273.15+15))) 
-}
-#####
-
-###########################################
-# Calculate WATER DENSITY w/ Temp and BP
-###########################################	
-#Water density of air saturated water given water temperature in degC.  
-#Equation updated by AG  - the International Committee for Weights and Measures (2001), who consider Patterson&Morris (1994), who Bob cited
-#https://metgen.pagesperso-orange.fr/metrologieen19.htm
-
-watdens.gcm3<-function(temp){
-  t<-temp
-  a1<- -3.983035  # degrees C
-  a2<- 301.797    # degrees C
-  a3<- 522528.9   # degrees C
-  a4<- 69.34881   # degrees C
-  a5<- 999.974950 # kg/m^3
-  
-  dens<- a5 * (1-(((t + a1)^2 * (t + a2))/(a3 * (t + a4)))) #returns result as kg/m^3
-  dens/1000   #converts kg/m^3 -> g/cm^3
-}
-#####
-
-###########################################
-# Calculate O2 SATURATION w/ Temp and BP
-###########################################	
-### Oxygen saturation. Alternative formulation from Garcia and Gordon (umol/kg), which is converted to mg/L and corrected for water density.  
-### This function gives the same values as from Colt and is the one a MIMSer should use.
-### u is the vapor pressure of water
-### Ending units mg/L
-
-osat.mgL<- function(temp, bp) {
-  u<-10^(8.10765-(1750.286/(235+temp)))
-  ts<-log((298.15-temp) / (273.15 + temp))
-  a0<-5.80871
-  a1<-3.20291
-  a2<-4.17887
-  a3<-5.1006
-  a4<- -9.86643e-2
-  a5<-3.80369
-  
-  u<-10^(8.07131-(1750.63/(233.426+temp))) #Antoine equation for the vapor pressure of water, final unit mmHg
-  sato<-(exp(a0 + a1*ts + a2*ts^2 + a3*ts^3 + a4*ts^4 + a5*ts^5))*((bp-u)/(760-u))
-  watdens.gcm3(temp)*sato*(31.9988/1000)##converts umol/kg to mg/L
-}
 ```
 
 # Weather/atmospheric data
@@ -241,7 +182,7 @@ ggplot(therm_15, aes(x = datetime, y = as.numeric(as.character(depth))))+
 
 ```
 
-### Daylight hours
+### Photosynthetically active radiation (par)
 lake metabolizer uses photosynthetically active radiation in the model. I used the light sensor nearest the surface of the water on the thermistor chain. Raw units are in lumens per square ft (foot-candles), but input should be in par units of umol per sq meter per second. 
 ```{r}
 #light data
@@ -262,6 +203,76 @@ ggplot(light_15_0.25m, aes(x = datetime, y = par)) +
 
 
 # Dissolved Oxygen
+
+### Gas saturation functions
+These functions are used for calculating O2 saturation. Some have been updated from those shared with us from folks Bob Hall's lab
+```{r}
+###########################################
+# Correct BAROMETRIC PRESSURE for altitude
+###########################################	
+### bpcalc function estimates barometric pressure (BP) given altitude and standard BP. This is the "bp" required for O2 sat. This is based on the barometric formula
+### temp = degC for the water
+### alt = elevation in m
+### bpst = standard barometric pressure in inches of Hg (untis usually given by weather websites).  
+### Temp is usually relative to a standard, 15 degC, and I have hard coded it at 15.  
+### Source: John Colt, Dissolved Gas Concentration in Water: Computation as Functions of Temperature, Salinity and Pressure, 2012
+
+#when bp input is in inches mercury
+bpcalc.inHg<- function(bpst, alt) {
+  bpst*25.4*exp((-9.80665*0.0289644*alt)/(8.31447*(273.15+15))) #25.4 converts inHg to mmHg, 288.15 is standard pressure at sea level
+}
+
+#when bp input is in mm mercury
+bpcalc.mmHg<- function(bpst, alt) {
+  bpst*exp((-9.80665*0.0289644*alt)/(8.31447*(273.15+15))) 
+}
+#####
+
+###########################################
+# Calculate WATER DENSITY w/ Temp and BP
+###########################################	
+#Water density of air saturated water given water temperature in degC.  
+#Equation updated by AG  - the International Committee for Weights and Measures (2001), who consider Patterson&Morris (1994), who Bob cited
+#https://metgen.pagesperso-orange.fr/metrologieen19.htm
+
+watdens.gcm3<-function(temp){
+  t<-temp
+  a1<- -3.983035  # degrees C
+  a2<- 301.797    # degrees C
+  a3<- 522528.9   # degrees C
+  a4<- 69.34881   # degrees C
+  a5<- 999.974950 # kg/m^3
+  
+  dens<- a5 * (1-(((t + a1)^2 * (t + a2))/(a3 * (t + a4)))) #returns result as kg/m^3
+  dens/1000   #converts kg/m^3 -> g/cm^3
+}
+#####
+
+###########################################
+# Calculate O2 SATURATION w/ Temp and BP
+###########################################	
+### Oxygen saturation. Alternative formulation from Garcia and Gordon (umol/kg), which is converted to mg/L and corrected for water density.  
+### This function gives the same values as from Colt and is the one a MIMSer should use.
+### u is the vapor pressure of water
+### Ending units mg/L
+
+osat.mgL<- function(temp, bp) {
+  u<-10^(8.10765-(1750.286/(235+temp)))
+  ts<-log((298.15-temp) / (273.15 + temp))
+  a0<-5.80871
+  a1<-3.20291
+  a2<-4.17887
+  a3<-5.1006
+  a4<- -9.86643e-2
+  a5<-3.80369
+  
+  u<-10^(8.07131-(1750.63/(233.426+temp))) #Antoine equation for the vapor pressure of water, final unit mmHg
+  sato<-(exp(a0 + a1*ts + a2*ts^2 + a3*ts^3 + a4*ts^4 + a5*ts^5))*((bp-u)/(760-u))
+  watdens.gcm3(temp)*sato*(31.9988/1000)##converts umol/kg to mg/L
+}
+```
+
+
 ```{r}
 
 #raw 5 minute data
@@ -409,7 +420,7 @@ return(output)
 
 ### Modeling with two gas transfer coefficients
 ```{r warning = FALSE}
-
+#metabolism using the Cole & Caraco (1998) gas transfer
 pondMetabolism.cole <- pondData_15 %>%
   metab.mle.estimates(do.obs = .$DO.mgL, #observations of DO in mg/L
                       do.sat = .$O2sat.expected, #expected DO saturation 
@@ -421,6 +432,7 @@ pondMetabolism.cole <- pondData_15 %>%
 #review
 head(pondMetabolism.cole)
 
+#metabolism using the Vachon & Prairie (1998) gas transfer
 pondMetabolism.vachon <- pondData_15 %>%
   metab.mle.estimates(do.obs = .$DO.mgL, #observations of DO in mg/L
                       do.sat = .$O2sat.expected, #expected DO saturation 
@@ -477,9 +489,9 @@ sum(pondMetabolism.vachon$ER>0)
 
 ```
 
+More to come here soon! 
 
-```{r}
-1 + 1
+```{r echo=FALSE}
 knitr::knit_exit()
 ```
 # Assessing model parameters [more here later]
