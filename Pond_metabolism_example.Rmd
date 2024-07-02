@@ -18,6 +18,7 @@ This example uses a maximum likelihood model (MLE) to estimate pond metabolism. 
 As a note, you'll see that I use lapply or do.call when I read in raw .csv files. I do this to combine the multiple files gained over time for a single sensor. In this example there is only one file per sensor, but I keep the lapply/do.call functions so they can be adapted.\ 
 
 This is unfinished! Still to come:
+
 * Assessing estimated MLE parameters 
 * Assessing estimated versus observed dissolved oxygen readings
 
