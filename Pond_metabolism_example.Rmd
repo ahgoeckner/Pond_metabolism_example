@@ -7,19 +7,19 @@ editor_options:
   chunk_output_type: console
 ---
 
-This R markdown is an example of modeling pond metabolism using 1 month of data (August 2022) from pond Meandering Way, a site in my 3rd chapter. We model pond metabolism using the LakeMetabolizer package (Winslow et al. 2016), and functions of the rLakeAnalyzer package (Winslow et al. 2019).
+This R markdown is an example of modeling pond metabolism using 1 month of data (August 2022) from pond Meandering Way, a site in my 3rd chapter. We model pond metabolism using the LakeMetabolizer package (Winslow et al. 2016), and functions of the rLakeAnalyzer package (Winslow et al. 2019).\
 
-|I built/modified this script from the tutorial I found online through a workshop hosted by GLEON (Global Lake Observatory Network) and run by Corinna Gries & Hilary Dugan: https://g11.gleon.org/data/gleon18/dataworkshop
+I built/modified this script from the tutorial I found online through a workshop hosted by GLEON (Global Lake Observatory Network) and run by Corinna Gries & Hilary Dugan: https://g11.gleon.org/data/gleon18/dataworkshop\
 
-|For our work, we collected thermal temperature profiles using thermistor chain with temp/light sensors throughout the water column. This pond was ~4 to 4.5 m deep and we had sensors down to 3 m deep. We did not use a pressure transducer to keep track of water level fluctuations. 
+For our work, we collected thermal temperature profiles using thermistor chain with temp/light sensors throughout the water column. This pond was ~4 to 4.5 m deep and we had sensors down to 3 m deep. We did not use a pressure transducer to keep track of water level fluctuations.\
 
-|This example uses a maximum likelihood model (MLE) to estimate pond metabolism. There is a bayesian approach I'd like to try in the future. 
+This example uses a maximum likelihood model (MLE) to estimate pond metabolism. There is a bayesian approach I'd like to try in the future.\  
 
-|As a note, you'll see that I use lapply or do.call when I read in raw .csv files. I do this to combine the multiple files gained over time for a single sensor. In this example there is only one file per sensor, but I keep the lapply/do.call functions so they can be adapted. 
+As a note, you'll see that I use lapply or do.call when I read in raw .csv files. I do this to combine the multiple files gained over time for a single sensor. In this example there is only one file per sensor, but I keep the lapply/do.call functions so they can be adapted.\ 
 
-|This is unfinished! Still to come:
-- Assessing estimated MLE parameters 
-- Assessing estimated versus observed dissolved oxygen readings
+This is unfinished! Still to come:
+* Assessing estimated MLE parameters 
+* Assessing estimated versus observed dissolved oxygen readings
 
 # Getting started
 ### Libraries

@@ -361,23 +361,25 @@ display: none;
 month of data (August 2022) from pond Meandering Way, a site in my 3rd
 chapter. We model pond metabolism using the LakeMetabolizer package
 (Winslow et al. 2016), and functions of the rLakeAnalyzer package
-(Winslow et al. 2019).</p>
-<p>|I built/modified this script from the tutorial I found online
-through a workshop hosted by GLEON (Global Lake Observatory Network) and
-run by Corinna Gries &amp; Hilary Dugan: <a href="https://g11.gleon.org/data/gleon18/dataworkshop" class="uri">https://g11.gleon.org/data/gleon18/dataworkshop</a></p>
-<p>|For our work, we collected thermal temperature profiles using
+(Winslow et al. 2019).<br />
+</p>
+<p>I built/modified this script from the tutorial I found online through
+a workshop hosted by GLEON (Global Lake Observatory Network) and run by
+Corinna Gries &amp; Hilary Dugan: <a href="https://g11.gleon.org/data/gleon18/dataworkshop\" class="uri">https://g11.gleon.org/data/gleon18/dataworkshop\</a></p>
+<p>For our work, we collected thermal temperature profiles using
 thermistor chain with temp/light sensors throughout the water column.
 This pond was ~4 to 4.5 m deep and we had sensors down to 3 m deep. We
 did not use a pressure transducer to keep track of water level
-fluctuations.</p>
-<p>|This example uses a maximum likelihood model (MLE) to estimate pond
+fluctuations.<br />
+</p>
+<p>This example uses a maximum likelihood model (MLE) to estimate pond
 metabolism. There is a bayesian approach I’d like to try in the
-future.</p>
-<p>|As a note, you’ll see that I use lapply or do.call when I read in
-raw .csv files. I do this to combine the multiple files gained over time
-for a single sensor. In this example there is only one file per sensor,
-but I keep the lapply/do.call functions so they can be adapted.</p>
-<p>|This is unfinished! Still to come: - Assessing estimated MLE
+future. </p>
+<p>As a note, you’ll see that I use lapply or do.call when I read in raw
+.csv files. I do this to combine the multiple files gained over time for
+a single sensor. In this example there is only one file per sensor, but
+I keep the lapply/do.call functions so they can be adapted. </p>
+<p>This is unfinished! Still to come: - Assessing estimated MLE
 parameters - Assessing estimated versus observed dissolved oxygen
 readings</p>
 <div id="getting-started" class="section level1">
